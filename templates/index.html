@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>QuestBoard</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>QuestBoard</h1>
+        <p class="sub">Your day becomes a dungeon. Complete quests to unlock rooms.</p>
+      </div>
+      <div class="pill" id="todayPill"></div>
+    </header>
+
+    <main class="grid">
+      <section class="card">
+        <div class="cardHead">
+          <h2>Dungeon</h2>
+          <div class="stats" id="stats"></div>
+        </div>
+        <pre class="dungeon" id="dungeon"></pre>
+        <div class="legend">
+          <span>⌂ start</span>
+          <span>□ unlocked</span>
+          <span>■ locked</span>
+          <span>♛ boss (all done)</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="cardHead">
+          <h2>Today’s Quests</h2>
+          <button class="ghost" id="rolloverBtn" title="Bring unfinished quests from your previous day">Rollover</button>
+        </div>
+
+        <form id="addForm" class="add">
+          <input id="title" placeholder="New quest title (e.g., finish problem set)" maxlength="120" required />
+          <input id="notes" placeholder="Notes (optional)" maxlength="200" />
+          <button type="submit">Add</button>
+        </form>
+
+        <div id="list" class="list"></div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Tip: make quests small. More completions = more rooms unlocked.</span>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
