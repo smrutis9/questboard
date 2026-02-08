@@ -1,57 +1,136 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>QuestBoard</title>
-  <link rel="stylesheet" href="/static/styles.css" />
-</head>
-<body>
-  <div class="wrap">
-    <header>
-      <div>
-        <h1>QuestBoard</h1>
-        <p class="sub">Your day becomes a dungeon. Complete quests to unlock rooms.</p>
-      </div>
-      <div class="pill" id="todayPill"></div>
-    </header>
-
-    <main class="grid">
-      <section class="card">
-        <div class="cardHead">
-          <h2>Dungeon</h2>
-          <div class="stats" id="stats"></div>
-        </div>
-        <pre class="dungeon" id="dungeon"></pre>
-        <div class="legend">
-          <span>⌂ start</span>
-          <span>□ unlocked</span>
-          <span>■ locked</span>
-          <span>♛ boss (all done)</span>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="cardHead">
-          <h2>Today’s Quests</h2>
-          <button class="ghost" id="rolloverBtn" title="Bring unfinished quests from your previous day">Rollover</button>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>QuestAtlas</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="logo">🗺️</div>
+          <div>
+            <div class="name">QuestAtlas</div>
+            <div class="tag">A map-based task board</div>
+          </div>
         </div>
 
-        <form id="addForm" class="add">
-          <input id="title" placeholder="New quest title (e.g., finish problem set)" maxlength="120" required />
-          <input id="notes" placeholder="Notes (optional)" maxlength="200" />
-          <button type="submit">Add</button>
-        </form>
+        <section class="panel">
+          <div class="panelTitle">Create a quest</div>
+          <form id="createForm" class="form">
+            <label class="label">Title</label>
+            <input id="titleInput" class="input" placeholder="e.g., Finish OS p7 writeup" maxlength="120" />
 
-        <div id="list" class="list"></div>
-      </section>
-    </main>
+            <label class="label">Note (optional)</label>
+            <textarea id="noteInput" class="textarea" placeholder="One sentence about what “done” means." maxlength="500"></textarea>
 
-    <footer>
-      <span>Tip: make quests small. More completions = more rooms unlocked.</span>
-    </footer>
-  </div>
+            <div class="hint">
+              Click a region on the map to place it:
+              <span class="pill">Village</span> <span class="pill">Trail</span> <span class="pill">Castle</span>
+            </div>
 
-  <script src="/static/app.js"></script>
-</body>
+            <div class="row">
+              <button class="btn primary" type="submit">Place Quest</button>
+              <button class="btn" id="randomPlace" type="button">Random</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panelTitle">Board</div>
+
+          <div class="boardStats">
+            <div class="stat">
+              <div class="statK">Village</div>
+              <div class="statV" id="countBacklog">0</div>
+            </div>
+            <div class="stat">
+              <div class="statK">Trail</div>
+              <div class="statV" id="countDoing">0</div>
+            </div>
+            <div class="stat">
+              <div class="statK">Castle</div>
+              <div class="statV" id="countDone">0</div>
+            </div>
+          </div>
+
+          <div class="miniHelp">
+            <div><b>Drag</b> quests around.</div>
+            <div><b>Cross regions</b> to change status.</div>
+            <div><b>Click</b> a quest to edit/delete.</div>
+            <div class="muted">Tip: scroll to zoom, click-drag to pan.</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panelTitle">Shortcuts</div>
+          <div class="shortcuts">
+            <div><kbd>Space</kbd> hold to pan</div>
+            <div><kbd>Esc</kbd> close quest panel</div>
+          </div>
+        </section>
+
+        <footer class="footer">
+          <span>Local • Flask • SQLite • Canvas</span>
+        </footer>
+      </aside>
+
+      <main class="main">
+        <div class="topbar">
+          <div class="legend">
+            <div class="legendItem"><span class="dot d1"></span> Village (Backlog)</div>
+            <div class="legendItem"><span class="dot d2"></span> Trail (Doing)</div>
+            <div class="legendItem"><span class="dot d3"></span> Castle (Done)</div>
+          </div>
+          <div class="actions">
+            <button class="btn" id="recenter">Recenter</button>
+            <button class="btn" id="exportJson">Export JSON</button>
+          </div>
+        </div>
+
+        <div class="canvasWrap">
+          <canvas id="map"></canvas>
+
+          <!-- Clicked quest panel -->
+          <div id="questPanel" class="questPanel hidden">
+            <div class="qpHeader">
+              <div class="qpTitle">Quest</div>
+              <button class="qpClose" id="qpClose" title="Close (Esc)">✕</button>
+            </div>
+
+            <div class="qpBody">
+              <div class="qpRow">
+                <div class="qpLabel">Title</div>
+                <input id="qpTitle" class="input" />
+              </div>
+
+              <div class="qpRow">
+                <div class="qpLabel">Note</div>
+                <textarea id="qpNote" class="textarea"></textarea>
+              </div>
+
+              <div class="qpRow">
+                <div class="qpLabel">Status</div>
+                <div class="qpStatus" id="qpStatus"></div>
+              </div>
+
+              <div class="qpRow qpBtns">
+                <button class="btn primary" id="qpSave">Save</button>
+                <button class="btn danger" id="qpDelete">Delete</button>
+              </div>
+
+              <div class="qpMeta muted" id="qpMeta"></div>
+            </div>
+          </div>
+
+          <!-- Toast -->
+          <div id="toast" class="toast hidden"></div>
+        </div>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
 </html>

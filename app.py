@@ -1,245 +1,181 @@
+from __future__ import annotations
 import os
 import sqlite3
-from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime
 from flask import Flask, jsonify, render_template, request
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(APP_DIR, "questboard.db")
-
 app = Flask(__name__)
+DB_PATH = os.path.join(os.path.dirname(__file__), "questboard.db")
 
-# ---------- DB ----------
-def db():
+
+def db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
-def init_db():
-    with db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS quests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                due_date TEXT NOT NULL,
-                done INTEGER NOT NULL DEFAULT 0,
-                done_at TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS meta (
-                k TEXT PRIMARY KEY,
-                v TEXT NOT NULL
-            )
-        """)
 
-init_db()
+def init_db() -> None:
+    conn = db()
+    cur = conn.cursor()
 
-# ---------- Dungeon generation ----------
-@dataclass
-class Room:
-    x: int
-    y: int
-    locked: bool
-    label: str
+    # Create table if it doesn't exist
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'backlog',
+            x REAL NOT NULL DEFAULT 0.0,
+            y REAL NOT NULL DEFAULT 0.0,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
 
-def today_seed() -> int:
-    # Stable seed per day; changes daily.
-    s = date.today().isoformat()
-    return int(s.replace("-", ""))
+    # --- lightweight migration: add missing columns if DB is old ---
+    cur.execute("PRAGMA table_info(quests)")
+    existing_cols = {row[1] for row in cur.fetchall()}  # row[1] = column name
 
-def lcg(seed: int):
-    # Tiny deterministic RNG (no deps).
-    a = 1664525
-    c = 1013904223
-    m = 2**32
-    state = seed & 0xFFFFFFFF
-    while True:
-        state = (a * state + c) % m
-        yield state
+    if "note" not in existing_cols:
+        cur.execute("ALTER TABLE quests ADD COLUMN note TEXT NOT NULL DEFAULT ''")
 
-def generate_dungeon(rooms_total: int, unlocked: int, seed: int):
-    """
-    Returns an ASCII dungeon grid.
-    - rooms_total: how many room slots exist today
-    - unlocked: how many are unlocked based on completed quests due today
-    """
-    # Grid size based on rooms_total (cap for readability)
-    rooms_total = max(3, min(60, rooms_total))
-    unlocked = max(1, min(rooms_total, unlocked))
+    if "status" not in existing_cols:
+        cur.execute("ALTER TABLE quests ADD COLUMN status TEXT NOT NULL DEFAULT 'backlog'")
 
-    w = 35
-    h = 17
-    grid = [[" " for _ in range(w)] for _ in range(h)]
-    rng = lcg(seed)
+    if "x" not in existing_cols:
+        cur.execute("ALTER TABLE quests ADD COLUMN x REAL NOT NULL DEFAULT 0.0")
 
-    # Start room near center
-    cx, cy = w // 2, h // 2
-    rooms = [Room(cx, cy, locked=False, label="S")]
+    if "y" not in existing_cols:
+        cur.execute("ALTER TABLE quests ADD COLUMN y REAL NOT NULL DEFAULT 0.0")
 
-    # Random walk to place rooms
-    dirs = [(1,0), (-1,0), (0,1), (0,-1)]
-    seen = {(cx, cy)}
-    x, y = cx, cy
+    if "created_at" not in existing_cols:
+        cur.execute("ALTER TABLE quests ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
 
-    while len(rooms) < rooms_total:
-        r = next(rng)
-        dx, dy = dirs[r % 4]
-        nx, ny = x + dx*2, y + dy*2  # spacing
-        if 1 <= nx < w-1 and 1 <= ny < h-1:
-            # Move
-            if (nx, ny) not in seen:
-                seen.add((nx, ny))
-                rooms.append(Room(nx, ny, locked=True, label=str((len(rooms)) % 10)))
-                # carve corridor between (x,y) and (nx,ny)
-                mx, my = (x + nx)//2, (y + ny)//2
-                grid[my][mx] = "·"
-            x, y = nx, ny
+    conn.commit()
+    conn.close()
 
-    # Mark unlocked rooms
-    for i, rm in enumerate(rooms):
-        if i < unlocked:
-            rm.locked = False
 
-    # Draw rooms
-    for i, rm in enumerate(rooms):
-        ch = "■" if rm.locked else "□"
-        grid[rm.y][rm.x] = ch
-
-    # Put start label
-    grid[rooms[0].y][rooms[0].x] = "⌂"
-
-    # Place "boss" at last room if unlocked all
-    if unlocked >= rooms_total:
-        bx, by = rooms[-1].x, rooms[-1].y
-        grid[by][bx] = "♛"
-
-    # Frame
-    for x in range(w):
-        grid[0][x] = "─"
-        grid[h-1][x] = "─"
-    for y in range(h):
-        grid[y][0] = "│"
-        grid[y][w-1] = "│"
-    grid[0][0] = "┌"
-    grid[0][w-1] = "┐"
-    grid[h-1][0] = "└"
-    grid[h-1][w-1] = "┘"
-
-    art = "\n".join("".join(row) for row in grid)
-    return art, rooms_total, unlocked
-
-# ---------- Helpers ----------
-def iso_now():
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-def today_str():
-    return date.today().isoformat()
-
-def count_today_due(conn):
-    t = today_str()
-    total = conn.execute("SELECT COUNT(*) AS c FROM quests WHERE due_date = ?", (t,)).fetchone()["c"]
-    done = conn.execute("SELECT COUNT(*) AS c FROM quests WHERE due_date = ? AND done = 1", (t,)).fetchone()["c"]
-    return total, done
-
-# ---------- Routes ----------
 @app.get("/")
 def index():
     return render_template("index.html")
 
-@app.get("/api/state")
-def api_state():
-    with db() as conn:
-        t = today_str()
-        quests = conn.execute("""
-            SELECT id, title, notes, created_at, due_date, done, done_at
-            FROM quests
-            WHERE due_date = ?
-            ORDER BY done ASC, id DESC
-        """, (t,)).fetchall()
 
-        total, done = count_today_due(conn)
-        # At least 5 rooms daily so dungeon isn't tiny
-        rooms_total = max(5, total + 3)
-        unlocked = max(1, done + 1)  # start room always accessible
+@app.get("/api/quests")
+def list_quests():
+    conn = db()
+    rows = conn.execute(
+        "SELECT id, title, note, status, x, y, created_at FROM quests ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
 
-        art, rt, un = generate_dungeon(rooms_total, unlocked, today_seed())
-        return jsonify({
-            "today": t,
-            "quests": [dict(q) for q in quests],
-            "stats": {"total": total, "done": done, "rooms_total": rt, "unlocked": un},
-            "dungeon": art
-        })
 
 @app.post("/api/quests")
-def api_add_quest():
-    data = request.get_json(force=True)
+def create_quest():
+    data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
-    notes = (data.get("notes") or "").strip()
+    note = (data.get("note") or "").strip()
+    status = (data.get("status") or "backlog").strip()
+    x = float(data.get("x", 0.0))
+    y = float(data.get("y", 0.0))
+
     if not title:
-        return jsonify({"error": "title required"}), 400
+        return jsonify({"error": "title is required"}), 400
+    if status not in ("backlog", "doing", "done"):
+        return jsonify({"error": "invalid status"}), 400
 
-    due = data.get("due_date") or today_str()
-    with db() as conn:
-        conn.execute("""
-            INSERT INTO quests (title, notes, created_at, due_date, done)
-            VALUES (?, ?, ?, ?, 0)
-        """, (title, notes, iso_now(), due))
-    return jsonify({"ok": True})
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO quests (title, note, status, x, y, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            title,
+            note,
+            status,
+            x,
+            y,
+            datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        ),
+    )
+    qid = cur.lastrowid
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, title, note, status, x, y, created_at FROM quests WHERE id = ?",
+        (qid,),
+    ).fetchone()
+    conn.close()
+    return jsonify(dict(row)), 201
 
-@app.post("/api/quests/<int:qid>/toggle")
-def api_toggle(qid: int):
-    with db() as conn:
-        row = conn.execute("SELECT done FROM quests WHERE id = ?", (qid,)).fetchone()
-        if not row:
-            return jsonify({"error": "not found"}), 404
-        new_done = 0 if row["done"] == 1 else 1
-        conn.execute("""
-            UPDATE quests
-            SET done = ?, done_at = ?
-            WHERE id = ?
-        """, (new_done, iso_now() if new_done else None, qid))
-    return jsonify({"ok": True})
+
+@app.patch("/api/quests/<int:qid>")
+def update_quest(qid: int):
+    data = request.get_json(silent=True) or {}
+
+    fields = []
+    vals = []
+
+    if "title" in data:
+        title = (data.get("title") or "").strip()
+        if not title:
+            return jsonify({"error": "title cannot be empty"}), 400
+        fields.append("title = ?")
+        vals.append(title)
+
+    if "note" in data:
+        note = (data.get("note") or "").strip()
+        fields.append("note = ?")
+        vals.append(note)
+
+    if "status" in data:
+        status = (data.get("status") or "").strip()
+        if status not in ("backlog", "doing", "done"):
+            return jsonify({"error": "invalid status"}), 400
+        fields.append("status = ?")
+        vals.append(status)
+
+    if "x" in data:
+        fields.append("x = ?")
+        vals.append(float(data["x"]))
+
+    if "y" in data:
+        fields.append("y = ?")
+        vals.append(float(data["y"]))
+
+    if not fields:
+        return jsonify({"error": "no valid fields"}), 400
+
+    vals.append(qid)
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(f"UPDATE quests SET {', '.join(fields)} WHERE id = ?", vals)
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({"error": "quest not found"}), 404
+
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, title, note, status, x, y, created_at FROM quests WHERE id = ?",
+        (qid,),
+    ).fetchone()
+    conn.close()
+    return jsonify(dict(row))
+
 
 @app.delete("/api/quests/<int:qid>")
-def api_delete(qid: int):
-    with db() as conn:
-        conn.execute("DELETE FROM quests WHERE id = ?", (qid,))
+def delete_quest(qid: int):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM quests WHERE id = ?", (qid,))
+    deleted = cur.rowcount
+    conn.commit()
+    conn.close()
+    if deleted == 0:
+        return jsonify({"error": "quest not found"}), 404
     return jsonify({"ok": True})
 
-@app.post("/api/rollover")
-def api_rollover():
-    """
-    Optional: copy unfinished quests from yesterday to today.
-    """
-    with db() as conn:
-        t = today_str()
-        # Find most recent day prior to today with quests
-        last = conn.execute("""
-            SELECT due_date
-            FROM quests
-            WHERE due_date < ?
-            ORDER BY due_date DESC
-            LIMIT 1
-        """, (t,)).fetchone()
-        if not last:
-            return jsonify({"ok": True, "copied": 0})
-        prev = last["due_date"]
-        rows = conn.execute("""
-            SELECT title, notes
-            FROM quests
-            WHERE due_date = ? AND done = 0
-        """, (prev,)).fetchall()
-        copied = 0
-        for r in rows:
-            conn.execute("""
-                INSERT INTO quests (title, notes, created_at, due_date, done)
-                VALUES (?, ?, ?, ?, 0)
-            """, (r["title"], r["notes"], iso_now(), t))
-            copied += 1
-    return jsonify({"ok": True, "copied": copied})
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    init_db()
+    app.run(host="127.0.0.1", port=5000, debug=True)
